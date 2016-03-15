@@ -1,0 +1,592 @@
+<html>
+
+<head>
+  <title>test</title>
+  <script type="text/javascript" src="../libs/three.js"></script>
+  <script type="text/javascript" src="../libs/physi.js"></script>
+  <script type="text/javascript" src="../libs/chroma.js"></script>
+  <script type="text/javascript" src="../libs/stats.js"></script>
+  <script type="text/javascript" src="../libs/dat.gui.js"></script>
+  <script type="text/javascript" src="../libs/OBJLoader.js"></script>
+  <style>
+    body {
+      /* set margin to 0 and overflow to hidden, to go fullscreen */
+      margin: 0;
+      overflow: hidden;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="Stats-output">
+  </div>
+  <!-- Div which will hold the Output -->
+  <div id="WebGL-output">
+  </div>
+  <div id="viewport">
+  </div>
+  <script type="text/javascript">
+
+    Physijs.scripts.worker = '../libs/physijs_worker.js';
+    Physijs.scripts.ammo = '../libs/ammo.js';
+
+    var render, renderer, render_stats, scene0, scene1, scene2, ground0, ground1, ground2, light, camera, sound1;
+    var scene = [], ball, points = [], tree, plane, wall, corn = [], isDead = false, isClear = 0, score = 0;
+    var pointsWall = [], pointsCorn = [], pointsTrap = [];
+    var walls = [], corns = [], traps = [];
+    var pointsBall = [], pointsGoal = [], goals = [];
+    var wall_mat = Physijs.createMaterial(new THREE.MeshLambertMaterial({transparent: true, opacity: 0}));
+    var sceneOpen, sceneEnd;
+    var openingFlag = true, endingFlag = false;
+    var Sound = function (sources, radius, volume){
+      var audio = document.createElement('audio');
+      for (var i = 0; i < sources.length; i++){
+        var source = document.createElement('source');
+        source.src = sources[i];
+        audio.appendChild(source);
+      }
+      this.position = new THREE.Vector3();
+      this.play = function(){
+        audio.play();
+      }
+      this.update = function(camera){
+        var distance = this.position.distanceTo(camera.position);
+        if(distance <= radius){
+          audio.volume = volume * (1 - distance /radius);
+        }else{
+          audio.volume = 0;
+        }
+      }
+    }
+
+    var scene_mesh;
+
+    function init() {
+
+      'use strict';
+
+      //setup the renderer
+      renderer = new THREE.WebGLRenderer({antialias:true});
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setClearColor(new THREE.Color(0x58b2d3));
+      document.getElementById('viewport').appendChild(renderer.domElement);
+
+      render_stats = new Stats();
+      render_stats.domElement.style.position = 'absolute';
+      render_stats.domElement.style.top = '1px';
+      render_stats.domElement.style.zIndex = 100;
+      document.getElementById('viewport').appendChild(render_stats.domElement);
+
+
+      //initianting the scenes.
+      scene0 = new Physijs.Scene();
+      scene0.setGravity(new THREE.Vector3(0,-200,0));
+      scene.push(scene0);
+
+      scene1 = new Physijs.Scene();
+      scene1.setGravity(new THREE.Vector3(0,-200,0));
+      scene.push(scene1);
+
+      scene2 = new Physijs.Scene();
+      scene2.setGravity(new THREE.Vector3(0,-200,0));
+      scene.push(scene2);
+
+      sceneOpen = new THREE.Scene();
+      sceneEnd = new THREE.Scene();
+
+      //initiating the camera
+      camera = new THREE.PerspectiveCamera(35,window.innerWidth / window.innerHeight,1,2000);
+      camera.position.set(0,200,0);
+      camera.lookAt(new THREE.Vector3(0,10,0));
+
+      sound1 = new Sound( [ '../assets/level_1.mp3', '../assets/level_1.ogg' ], 275, 1 );
+      sound1.position.copy( camera.position );
+      sound1.play();
+
+      //initiating the lights
+      light = new THREE.HemisphereLight(0xffffff,0xffffff,1);
+      light.position.set(0,5,0);
+      scene0.add(light.clone());
+      scene1.add(light.clone());
+      scene2.add(light.clone());
+      sceneEnd.add(light.clone());
+      sceneOpen.add(light.clone());
+
+      document.getElementById("WebGL-output").appendChild(renderer.domElement);
+
+      var step = 0;
+      var gui = new dat.GUI();
+
+      //scene counter for which scene should be rendered.
+      var sceneIndex = 0;
+
+      //reset the scene by removing all the elements and re-adding them
+      var control = new function() {
+        this.resetScene = function() {
+          if(corns && corns.length!=0) {
+            corns.forEach(function(corn) {
+              scene[sceneIndex].remove(corn);
+            });
+          }
+          if(traps && traps.length!=0) {
+            traps.forEach(function(trap) {
+              scene[sceneIndex].remove(trap);
+            });
+          }
+          if(ball) {
+            scene[sceneIndex].remove(ball);
+          }
+          if(goals[sceneIndex]) {
+            scene[sceneIndex].remove(goals[sceneIndex]);
+          }
+
+          scene[sceneIndex].rotation.x = 0;
+          scene[sceneIndex].rotation.z = 0;
+          scene[sceneIndex].setGravity(new THREE.Vector3(0,-200,0));
+          createBall();
+          createCorn();
+          createTrap();
+          createGoal();
+        }
+      }
+
+      //points of goal in each level
+      pointsGoal = [new THREE.Vector3(-45,12,45), new THREE.Vector3(-45,12,0), new THREE.Vector3(10,12,-7.5)];
+      //spawning points of avatar in each level
+      pointsBall = [new THREE.Vector3(42.5,15,-42.5), new THREE.Vector3(-42.5,15,-42.5), new THREE.Vector3(-42.5,15,42.5)];
+
+
+      ground0 = createGround();
+      ground1 = createGround();
+      ground2 = createGround();
+      createCornPoints();
+      createTrapPoints();
+      setupScene0();
+      setupScene1();
+      setupScene2();
+      createOpeningScene();
+      createEndingScene();
+      control.resetScene();
+
+      createEventListeners();
+
+      render();
+
+      function render() {
+        render_stats.update();
+
+        // render using requestAnimationFrame
+        requestAnimationFrame(render);
+
+        if(sceneIndex>2) {
+          endingFlag = true;
+        }
+
+        if(openingFlag) {
+          renderer.render(sceneOpen, camera);
+        } else if(endingFlag) {
+          renderer.render(sceneEnd, camera);
+        } else {
+          renderer.render(scene[sceneIndex], camera);
+        }
+
+        corns.forEach(function(corn) {
+          corn.rotation.y += 0.01;
+          corn.__dirtyRotation = true;
+        });
+
+        if(isDead || isClear) {
+          control.resetScene();
+          isDead = false;
+          isClear = false;
+        }
+
+        scene[sceneIndex].simulate(undefined, 1);
+        sound1.update(camera);
+      }
+
+      //event listener which controls the rotation of the scene
+      function createEventListeners() {
+        var domElement = document.getElementById("WebGL-output");
+
+  		 	function mouseMoveListener(event) {
+          if (event.buttons) {
+            //rotate the scene.
+            scene[sceneIndex].rotation.x += event.movementX/-100;
+            scene[sceneIndex].rotation.z += event.movementY/-100;
+            //actually rotate the gravity
+            scene[sceneIndex].setGravity(new THREE.Vector3(scene[sceneIndex].rotation.z*-75, -100 ,scene[sceneIndex].rotation.x*75))
+          }
+  		 	}
+
+        function keyDownListener( event ) {
+          console.dir(event);
+          switch( event.keyCode ) {
+            case 13: //enter
+            openingFlag = false;
+            break;
+
+            case 32: //space
+            isDead = true;
+            break;
+          }
+        }
+ 
+        domElement.addEventListener("keydown",keyDownListener,false);
+        domElement.setAttribute("tabindex", 0);
+        domElement.addEventListener("mousemove",mouseMoveListener,false);
+      }
+
+      //points around the ground
+      //use to make a wall of trees
+      function createPoints() {
+        for(var i=-50;i<=50;i+=5) {
+          points.push(new THREE.Vector3(i,15,-50));
+          points.push(new THREE.Vector3(i,15,50));
+          points.push(new THREE.Vector3(-50,15,i));
+          points.push(new THREE.Vector3(50,15,i));
+        }
+      }
+
+      function createBall() {
+          var geometry = new THREE.SphereGeometry( 1.5, 32, 32 );
+          geometry.__dirtyRotation = true;
+          var material = new THREE.MeshBasicMaterial( {color: 0xffffff, wireframe:true} );
+          ball = new Physijs.SphereMesh(geometry, material);
+          ball.__dirtyRotation = true;
+          ball.__dirtyPosition = true;
+          ball.position.copy(pointsBall[sceneIndex]);
+          ball.setCcdMotionThreshold(1);
+          ball.setCcdSweptSphereRadius(0.2);
+          scene[sceneIndex].add(ball);
+      }
+
+      function createCornPoints() {
+        pointsCorn[0] = [new THREE.Vector3(12.5,12,-42.5), new THREE.Vector3(7.5,12,42.5), new THREE.Vector3(-42.5, 12, 22.5)];
+        pointsCorn[1] = [new THREE.Vector3(35,12,43),new THREE.Vector3(-12.5,12,-42.5),new THREE.Vector3(42.5,12,-42.5)];
+        pointsCorn[2] = [new THREE.Vector3(15,12,45), new THREE.Vector3(45,12,-45), new THREE.Vector3(-45,12,-45)];
+      }
+
+      //add corns to the current scene.
+      function createCorn() {
+        var loader = new THREE.JSONLoader();
+        pointsCorn[sceneIndex].forEach(function(point) {
+          loader.load('../assets/models/test/corn_joined.json', function(geometry, materials) {
+            var corn_mat = new THREE.MeshFaceMaterial(materials);
+            corn_mat.wireframe = true;
+            var corn_mesh = new Physijs.BoxMesh(geometry, corn_mat, 0);
+            corn_mesh.position.copy(point);
+            scene[sceneIndex].add(corn_mesh);
+            corns.push(corn_mesh);
+
+            //remove the corn from the scene1 when collide with the avatar
+            corn_mesh.addEventListener('collision', function(ball) {
+              if(corn_mesh) {
+                scene[sceneIndex].remove(corn_mesh);
+              }
+            });
+          });
+        });
+      }
+
+      function createTrapPoints() {
+        pointsTrap[0] = [new THREE.Vector3(42.5,12,-32.5),new THREE.Vector3(35,12,-32.5),new THREE.Vector3(12.5,12,-25),new THREE.Vector3(42.5,12,42.5),new THREE.Vector3(42.5,12,35),new THREE.Vector3(-30,12,-27.5),new THREE.Vector3(-23.5,12,23.5),new THREE.Vector3(-23.5,12,16.5),new THREE.Vector3(-23,12,-25),new THREE.Vector3(-12,12,-42),new THREE.Vector3(-20,12,-42),new THREE.Vector3(44,12,13), new THREE.Vector3(37,12,13)];
+        pointsTrap[1] = [new THREE.Vector3(35,12,35),new THREE.Vector3(15,12,-26),new THREE.Vector3(15,12,-18),new THREE.Vector3(45,12,-32.5),new THREE.Vector3(-43,12,43),new THREE.Vector3(-36,12,43),new THREE.Vector3(-30,12,-2),new THREE.Vector3(-35,12,-6)];
+        pointsTrap[2] = [new THREE.Vector3(43,12,20),new THREE.Vector3(37,12,20),new THREE.Vector3(-43,12,33),new THREE.Vector3(-37,12,33),new THREE.Vector3(20,12,5.5),new THREE.Vector3(13,12,5.5),new THREE.Vector3(27,12,5.5),new THREE.Vector3(-44,12,18),new THREE.Vector3(-15,12,10),new THREE.Vector3(-15,12,18),new THREE.Vector3(-33,12,-8),new THREE.Vector3(-33,12,-14),new THREE.Vector3(-18,12,-29),new THREE.Vector3(-18,12,-23),new THREE.Vector3(-3,12,-8),new THREE.Vector3(-3,12,-14),new THREE.Vector3(35,12,-12)];
+      }
+
+      //add traps to the current scene.
+      function createTrap() {
+        var loader = new THREE.JSONLoader();
+        pointsTrap[sceneIndex].forEach(function(point) {
+          loader.load('../assets/models/test/trap.json', function(geometry, materials) {
+            var trap_mat = new THREE.MeshFaceMaterial(materials);
+            trap_mat.wireframe = true;
+            var trap_mesh = new Physijs.BoxMesh(geometry, trap_mat, 0);
+            trap_mesh.position.copy(point);
+            scene[sceneIndex].add(trap_mesh);
+            traps.push(trap_mesh);
+
+            //remove the corn from the scene1 when collide with the avatar
+            trap_mesh.addEventListener('collision', function(ball) {
+              if(trap_mesh) {
+                scene[sceneIndex].remove(trap_mesh);
+                scene[sceneIndex].remove(ball);
+                isDead = true;
+              }
+            });
+          });
+        });
+      }
+
+      //add goal to the current scene.
+      function createGoal() {
+        var loader = new THREE.JSONLoader();
+        loader.load('../assets/models/test/end.json', function(geometry, materials) {
+          var goal_mat = new THREE.MeshFaceMaterial(materials);
+          goal_mat.wireframe = true;
+          var goal_mesh = new Physijs.BoxMesh(geometry, goal_mat, 0);
+          goal_mesh.position.copy(pointsGoal[sceneIndex]);
+          scene[sceneIndex].add(goal_mesh);
+          goals.push(goal_mesh);
+
+          goal_mesh.addEventListener('collision', function(ball) {
+            if(goal_mesh) {
+              sceneIndex+=1;
+              isClear = true;
+            }
+          });
+        });
+      }
+
+      //create the plane ground where everything is on.
+      //the ground contains four surrounding walls and tree meshes by default.
+      function createGround() {
+        var loader = new THREE.JSONLoader();
+
+        var ground_geo = new THREE.BoxGeometry(100,20,100);
+        var material = new THREE.MeshLambertMaterial({color:0xa28c37});
+
+        createPoints();
+
+        var ground = new Physijs.BoxMesh(ground_geo, material, 0);
+        ground.position.set(0,0,0);
+        ground.__dirtyRotation = true;
+
+        // load a resource
+        loader.load('../assets/models/test/tree.json', function ( geometry, materials ) {
+          material = new THREE.MeshFaceMaterial(materials);
+          points.forEach(function(point){
+            tree = new THREE.Mesh(geometry, material);
+            tree.position.copy(point);
+          	ground.add(tree);
+  	      });
+        });
+        var wall_geo = new THREE.BoxGeometry(5,100,95);
+        //four wall around the plane
+        wall = new Physijs.BoxMesh(wall_geo,wall_mat);
+        wall.position.set(50,16,0);
+        ground.add(wall);
+
+        wall = new Physijs.BoxMesh(wall_geo,wall_mat);
+        wall.position.set(-50,16,0);
+        ground.add(wall);
+
+        wall = new Physijs.BoxMesh(wall_geo,wall_mat);
+        wall.position.set(0,16,50);
+        wall.rotation.set(0,0.5*Math.PI,0);
+        ground.add(wall);
+
+        wall = new Physijs.BoxMesh(wall_geo,wall_mat);
+        wall.position.set(0,16,-50);
+        wall.rotation.set(0,0.5*Math.PI,0);
+        ground.add(wall);
+
+        return ground;
+      }
+
+      //setup scene0
+      function setupScene0() {
+        var wall_geo;
+        var wall_mesh;
+        var loader = new THREE.JSONLoader();
+
+        //points of internal walls
+        var pointsWall0 = [new THREE.Vector3(-32.5,10,30), new THREE.Vector3(0,10,37.5), new THREE.Vector3(12.5,10,25), new THREE.Vector3(17.5,10,5), new THREE.Vector3(-30,10,2.5), new THREE.Vector3(-5,10,-27.5), new THREE.Vector3(20,10,-32.5), new THREE.Vector3(20,10,-15)];
+
+        //internal walls
+        var wall0 = [];
+        wall0.push(new Physijs.BoxMesh(new THREE.BoxGeometry(30,20,5),wall_mat));
+        wall0.push(new Physijs.BoxMesh(new THREE.BoxGeometry(5,20,20),wall_mat));
+        wall0.push(new Physijs.BoxMesh(new THREE.BoxGeometry(30,20,5),wall_mat));
+        wall0.push(new Physijs.BoxMesh(new THREE.BoxGeometry(60,20,5),wall_mat));
+        wall0.push(new Physijs.BoxMesh(new THREE.BoxGeometry(5,20,50),wall_mat));
+        wall0.push(new Physijs.BoxMesh(new THREE.BoxGeometry(5,20,40),wall_mat));
+        wall0.push(new Physijs.BoxMesh(new THREE.BoxGeometry(5,20,30),wall_mat));
+        wall0.push(new Physijs.BoxMesh(new THREE.BoxGeometry(25,20,5),wall_mat));
+
+        pointsWall.push(pointsWall0);
+        walls.push(wall0);
+
+        //add the internal walls to the scene
+        for(var i = 0; i < pointsWall0.length; i++) {
+          wall0[i].position.copy(pointsWall0[i]);
+          ground0.add(wall0[i]);
+        }
+
+        //add the internal trees into the scene
+        wall0.forEach(function(internalWall) {
+          var internalPoint = internalWall.position;
+          var x = internalPoint.x;
+          var y = internalPoint.y+5;
+          var z = internalPoint.z;
+          loader.load('../assets/models/test/tree.json', function ( geometry, materials ) {
+            var material = new THREE.MeshFaceMaterial(materials);
+              if(internalWall.geometry.parameters.width == 5) {
+                for(var i = z - 0.5*internalWall.geometry.parameters.depth+2.5; i <= z + 0.5*internalWall.geometry.parameters.depth-2.5; i+=5) {
+                  tree = new THREE.Mesh(geometry, material);
+                  tree.position.set(x,y,i);
+                  ground0.add(tree);
+                }
+              } else if(internalWall.geometry.parameters.depth == 5) {
+                for(var i = x - 0.5*internalWall.geometry.parameters.width+2.5; i <= x + 0.5*internalWall.geometry.parameters.width-2.5; i+=5) {
+                  tree = new THREE.Mesh(geometry, material);
+                  tree.position.set(i,y,z);
+                  ground0.add(tree);
+                }
+              }
+          });
+        })
+
+        scene0.add(ground0);
+      }
+
+      //setup scene1
+      function setupScene1() {
+        var wall_geo;
+        var wall_mesh;
+        var loader = new THREE.JSONLoader();
+
+        //points of internal walls
+        var pointsWall1 = [new THREE.Vector3(-5, 10, 37.5), new THREE.Vector3(-25, 10, 37.5), new THREE.Vector3(25, 10,37.5), new THREE.Vector3(-35, 10, 7.5), new THREE.Vector3(10, 10, 17.5), new THREE.Vector3(-35,10, -37.5), new THREE.Vector3(-20, 10, -25), new THREE.Vector3(-5,10,-37.5), new THREE.Vector3(0,10,5), new THREE.Vector3(-5,10,-12.5), new THREE.Vector3(22.5,10,-32.5), new THREE.Vector3(37.5,10,-10), new THREE.Vector3(37.5,10,18), new THREE.Vector3(-42.5,10,-5)];
+        //internal walls
+        var wall1 = [];
+        wall_geo = new THREE.BoxGeometry(5, 20, 20);
+        for(var i = 0; i < 8; i++) {
+          wall_mesh = new Physijs.BoxMesh(wall_geo,wall_mat);
+          wall1.push(wall_mesh);
+        }
+        wall1.push(new Physijs.BoxMesh(new THREE.BoxGeometry(65,20,5),wall_mat));
+        wall1.push(new Physijs.BoxMesh(new THREE.BoxGeometry(35,20,5),wall_mat));
+        wall1.push(new Physijs.BoxMesh(new THREE.BoxGeometry(20,20,5),wall_mat));
+        wall1.push(new Physijs.BoxMesh(new THREE.BoxGeometry(20,20,5),wall_mat));
+        wall1.push(new Physijs.BoxMesh(new THREE.BoxGeometry(20,20,5),wall_mat));
+        wall1.push(new Physijs.BoxMesh(new THREE.BoxGeometry(10,20,5),wall_mat));
+        pointsWall.push(pointsWall1);
+        walls.push(wall1);
+        //add the internal walls into the scene
+        for(var i = 0; i < pointsWall1.length; i++) {
+          wall1[i].position.copy(pointsWall1[i]);
+          ground1.add(wall1[i]);
+        }
+
+        //add the internal trees into the scene
+        wall1.forEach(function(internalWall) {
+          var internalPoint = internalWall.position;
+          var x = internalPoint.x;
+          var y = internalPoint.y+5;
+          var z = internalPoint.z;
+          loader.load('../assets/models/test/tree.json', function ( geometry, materials ) {
+            var material = new THREE.MeshFaceMaterial(materials);
+              if(internalWall.geometry.parameters.width == 5) {
+                for(var i = z - 0.5*internalWall.geometry.parameters.depth+2.5; i <= z + 0.5*internalWall.geometry.parameters.depth-2.5; i+=5) {
+                  tree = new THREE.Mesh(geometry, material);
+                  tree.position.set(x,y,i);
+                  ground1.add(tree);
+                }
+              } else if(internalWall.geometry.parameters.depth == 5) {
+                for(var i = x - 0.5*internalWall.geometry.parameters.width+2.5; i <= x + 0.5*internalWall.geometry.parameters.width-2.5; i+=5) {
+                  tree = new THREE.Mesh(geometry, material);
+                  tree.position.set(i,y,z);
+                  ground1.add(tree);
+                }
+              }
+          });
+        });
+
+        scene1.add(ground1);
+      }
+
+      //setup scene2
+      function setupScene2() {
+        var wall_geo;
+        var wall_mesh;
+        var loader = new THREE.JSONLoader();
+
+        //points of internal walls
+        var pointsWall2 = [new THREE.Vector3(-25, 10, -35), new THREE.Vector3(-5, 10, -2.5), new THREE.Vector3(15, 10, -20), new THREE.Vector3(-7.5, 10, 15), new THREE.Vector3(35, 10, -32.5), new THREE.Vector3(7.5 ,10, 42.5), new THREE.Vector3(20, 10, 35), new THREE.Vector3(32.5, 10, 12.5), new THREE.Vector3(-37.5, 10, 25)];
+
+        //internal walls
+        var wall2 = [];
+        wall2.push(new Physijs.BoxMesh(new THREE.BoxGeometry(45,20,5),wall_mat));
+        wall2.push(new Physijs.BoxMesh(new THREE.BoxGeometry(60,20,5),wall_mat));
+        wall2.push(new Physijs.BoxMesh(new THREE.BoxGeometry(5,20,30),wall_mat));
+        wall2.push(new Physijs.BoxMesh(new THREE.BoxGeometry(5,20,30),wall_mat));
+        wall2.push(new Physijs.BoxMesh(new THREE.BoxGeometry(5,20,30),wall_mat));
+        wall2.push(new Physijs.BoxMesh(new THREE.BoxGeometry(5,20,10),wall_mat));
+        wall2.push(new Physijs.BoxMesh(new THREE.BoxGeometry(30,20,5),wall_mat));
+        wall2.push(new Physijs.BoxMesh(new THREE.BoxGeometry(30,20,5),wall_mat));
+        wall2.push(new Physijs.BoxMesh(new THREE.BoxGeometry(20,20,5),wall_mat));
+
+        //add the internal walls into the scene
+        for(var i = 0; i < pointsWall2.length; i++) {
+          wall2[i].position.copy(pointsWall2[i]);
+          ground2.add(wall2[i]);
+        }
+
+        //add the internal trees into the scene
+        wall2.forEach(function(internalWall) {
+          var internalPoint = internalWall.position;
+          var x = internalPoint.x;
+          var y = internalPoint.y+5;
+          var z = internalPoint.z;
+          loader.load('../assets/models/test/tree.json', function ( geometry, materials ) {
+            var material = new THREE.MeshFaceMaterial(materials);
+              if(internalWall.geometry.parameters.width == 5) {
+                for(var i = z - 0.5*internalWall.geometry.parameters.depth+2.5; i <= z + 0.5*internalWall.geometry.parameters.depth-2.5; i+=5) {
+                  tree = new THREE.Mesh(geometry, material);
+                  tree.position.set(x,y,i);
+                  ground2.add(tree);
+                }
+              } else if(internalWall.geometry.parameters.depth == 5) {
+                for(var i = x - 0.5*internalWall.geometry.parameters.width+2.5; i <= x + 0.5*internalWall.geometry.parameters.width-2.5; i+=5) {
+                  tree = new THREE.Mesh(geometry, material);
+                  tree.position.set(i,y,z);
+                  ground2.add(tree);
+                }
+              }
+          });
+        });
+
+        scene2.add(ground2);
+      }
+
+      function createEndingScene() {
+        var ground_geo = new THREE.BoxGeometry(100,20,100);
+        var ground_tex = THREE.ImageUtils.loadTexture('../assets/models/test/ending.png');
+        var ground_mat = new THREE.MeshLambertMaterial({map: ground_tex});
+        var ground_mesh = new THREE.Mesh(ground_geo,ground_mat);
+        ground_mesh.rotation.y = Math.PI*0.5;
+        sceneEnd.add(ground_mesh);
+      }
+
+      function createOpeningScene() {
+        var ground_geo = new THREE.BoxGeometry(100,20,100);
+        var ground_tex = THREE.ImageUtils.loadTexture('../assets/models/test/opening.png');
+        var ground_mat = new THREE.MeshLambertMaterial({map: ground_tex});
+        var ground_mesh = new THREE.Mesh(ground_geo,ground_mat);
+        ground_mesh.rotation.y = Math.PI*0.5;
+        sceneOpen.add(ground_mesh);
+      }
+
+      function initStats() {
+
+          var stats = new Stats();
+          stats.setMode(0); // 0: fps, 1: ms
+
+          // Align top-left
+          stats.domElement.style.position = 'absolute';
+          stats.domElement.style.left = '0px';
+          stats.domElement.style.top = '0px';
+
+          document.getElementById("Stats-output").appendChild(stats.domElement);
+
+          return stats;
+      }
+  }
+  window.onload = init;
+
+  </script>
+
+</body>
